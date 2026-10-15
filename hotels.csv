@@ -1,2 +1,4 @@
 hotel_name,address,check_in,check_out,nights,lat,lon,note
-The People - Paris Bercy,"Paris, France ",2026-12-18,2026-12-20,2,48.8588897,2.320041,
+The People - Paris Marais,"17 Bd Morland, 75004 Paris, France",2027-01-02,2027-01-05,3,48.8499618,2.3631985,
+The People - Paris Bercy,"28 Bd de Reuilly, 75012 Paris, France",2026-12-18,2026-12-20,2,48.839067,2.3924916,
+MEININGER Hotel Amsterdam City West,Amsterdam,2026-12-21,2026-12-28,7,52.3906788,4.8374505,
