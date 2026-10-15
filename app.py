@@ -222,7 +222,6 @@ with main_tab1:
       day_df = df[df["day"] == d] if not df.empty else pd.DataFrame()
 
       if not day_df.empty:
-        # 💡 隱藏 lat 和 lon，只留下 day, location_name, note 讓使用者編輯
         display_df = day_df[["day", "location_name", "note"]]
         edited_display_df = st.data_editor(
             display_df,
@@ -231,7 +230,6 @@ with main_tab1:
             hide_index=True,
         )
         if not edited_display_df.equals(display_df):
-          # 將修改後的 day, location_name, note 更新回去，同時保留原本的 lat 和 lon
           df.loc[df["day"] == d, ["day", "location_name", "note"]] = (
               edited_display_df.values
           )
@@ -365,10 +363,20 @@ with main_tab1:
     if not hotels_df.empty:
       for _, h_row in hotels_df.iterrows():
         h_lat, h_lon = h_row["lat"], h_row["lon"]
-        popup_text = f"<b>🏨 住宿: {h_row['hotel_name']}</b><br>地址: {h_row['address']}<br>入住: {h_row['check_in']} ~ 退房: {h_row['check_out']} ({h_row['nights']} 晚)<br>{h_row['note']}"
+        maps_url = f"https://www.google.com/maps/search/?api=1&query={h_lat},{h_lon}"
+        popup_html = f"""
+            <div style="font-family:sans-serif; min-width: 200px;">
+                <b>🏨 住宿: {h_row['hotel_name']}</b><br>
+                <hr style="margin: 5px 0;">
+                <b>地址:</b> {h_row['address']}<br>
+                <b>入住:</b> {h_row['check_in']} ~ {h_row['check_out']} ({h_row['nights']} 晚)<br>
+                <b>備註:</b> {h_row['note']}<br><br>
+                <a href="{maps_url}" target="_blank" style="background:#4F46E5; color:white; padding:4px 8px; border-radius:4px; text-decoration:none; display:inline-block; font-size:12px;">🗺️ 開啟 Google 導航</a>
+            </div>
+        """
         folium.Marker(
             [h_lat, h_lon],
-            popup=popup_text,
+            popup=folium.Popup(popup_html, max_width=300),
             tooltip=f"飯店: {h_row['hotel_name']}",
             icon=folium.Icon(color="red", icon="home", prefix="fa"),
         ).add_to(m)
@@ -385,11 +393,19 @@ with main_tab1:
         for _, row in day_df.iterrows():
           lat, lon = row["lat"], row["lon"]
           day_coords.append([lat, lon])
+          maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
 
-          popup_text = f"<b>Day {int(row['day'])}: {row['location_name']}</b><br>{row['note']}"
+          popup_html = f"""
+              <div style="font-family:sans-serif; min-width: 180px;">
+                  <b>Day {int(row['day'])}: {row['location_name']}</b><br>
+                  <hr style="margin: 5px 0;">
+                  <b>備註:</b> {row['note']}<br><br>
+                  <a href="{maps_url}" target="_blank" style="background:#0D9488; color:white; padding:4px 8px; border-radius:4px; text-decoration:none; display:inline-block; font-size:12px;">🗺️ 開啟 Google 導航</a>
+              </div>
+          """
           folium.Marker(
               [lat, lon],
-              popup=popup_text,
+              popup=folium.Popup(popup_html, max_width=300),
               tooltip=f"Day {int(row['day'])}: {row['location_name']}",
               icon=folium.Icon(color=day_color, icon="info-sign"),
           ).add_to(m)
@@ -592,6 +608,13 @@ with main_tab3:
   if not links_df.empty:
     edited_links = st.data_editor(
         links_df[["title", "category", "url", "note"]],
+        column_config={
+            "url": st.column_config.LinkColumn(
+                "網址 (點擊開啟)",
+                help="點擊連結直接開啟網頁或 PDF",
+                max_chars=100,
+            )
+        },
         key="links_editor",
         use_container_width=True,
         hide_index=True,
