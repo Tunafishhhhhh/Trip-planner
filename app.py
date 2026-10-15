@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from geopy.geocoders import Nominatim
 import folium
 import pandas as pd
@@ -9,7 +9,7 @@ st.set_page_config(page_title="我的個人旅行與航班助手", layout="wide"
 
 st.title("✈️ 個人旅行與行程地圖儀表板")
 
-# 初始化 Session State 裡的資料（含航班資訊自動讀取）
+# 初始化 Session State 裡的資料（含全新的飯店日期欄位）
 if "itinerary" not in st.session_state:
   try:
     st.session_state.itinerary = pd.read_csv("itinerary.csv")
@@ -24,7 +24,16 @@ if "hotels" not in st.session_state:
     st.session_state.hotels = pd.read_csv("hotels.csv")
   except FileNotFoundError:
     st.session_state.hotels = pd.DataFrame(
-        columns=["hotel_name", "address", "nights", "lat", "lon", "note"]
+        columns=[
+            "hotel_name",
+            "address",
+            "check_in",
+            "check_out",
+            "nights",
+            "lat",
+            "lon",
+            "note",
+        ]
     )
     st.session_state.hotels.to_csv("hotels.csv", index=False)
 
@@ -98,7 +107,7 @@ with st.sidebar:
       st.success(f"成功新增交通項目「{trans_name_input}」！")
       st.rerun()
     else:
-      st.warning("請填寫交通名稱、起點與終點！")
+      st.warning("請填寫交通名稱、起點與總起終點！")
 
   st.markdown("---")
   st.subheader("🏨 新增住宿飯店")
@@ -106,9 +115,22 @@ with st.sidebar:
   hotel_address_input = st.text_input(
       "飯店地址或城市", "例如：Paris, France 或 街道地址"
   )
-  hotel_nights = st.number_input(
-      "入住天數 (Nights)", min_value=1, value=2, step=1
-  )
+
+  col_d1, col_d2 = st.columns(2)
+  with col_d1:
+    check_in_input = st.date_input("入住日期", value=date.today(), key="h_in")
+  with col_d2:
+    check_out_input = st.date_input(
+        "退房日期", value=date.today() + timedelta(days=2), key="h_out"
+    )
+
+  hotel_nights = (check_out_input - check_in_input).days
+  if hotel_nights < 1:
+    hotel_nights = 1
+    st.warning("退房日期需晚於入住日期，已自動設為 1 晚。")
+  else:
+    st.info(f"自動計算入住天數：{hotel_nights} 晚")
+
   hotel_note = st.text_area("飯店備註", "含早餐、已付訂金")
 
   if st.button("➕ 新增飯店"):
@@ -129,6 +151,8 @@ with st.sidebar:
             new_hotel = pd.DataFrame({
                 "hotel_name": [hotel_name_input],
                 "address": [hotel_address_input],
+                "check_in": [str(check_in_input)],
+                "check_out": [str(check_out_input)],
                 "nights": [int(hotel_nights)],
                 "lat": [lat],
                 "lon": [lon],
@@ -281,7 +305,7 @@ with main_tab1:
     if not hotels_df.empty:
       for _, h_row in hotels_df.iterrows():
         h_lat, h_lon = h_row["lat"], h_row["lon"]
-        popup_text = f"<b>🏨 住宿: {h_row['hotel_name']}</b><br>地址: {h_row['address']}<br>入住: {h_row['nights']} 晚<br>{h_row['note']}"
+        popup_text = f"<b>🏨 住宿: {h_row['hotel_name']}</b><br>地址: {h_row['address']}<br>入住: {h_row['check_in']} ~ 退房: {h_row['check_out']} ({h_row['nights']} 晚)<br>{h_row['note']}"
         folium.Marker(
             [h_lat, h_lon],
             popup=popup_text,
@@ -329,21 +353,33 @@ with main_tab2:
   with col_t1:
     st.subheader("🏨 住宿飯店清單")
     if not st.session_state.hotels.empty:
+      hotel_cols_to_show = [
+          "hotel_name",
+          "address",
+          "check_in",
+          "check_out",
+          "nights",
+          "note",
+      ]
+      for col in hotel_cols_to_show:
+        if col not in st.session_state.hotels.columns:
+          st.session_state.hotels[col] = ""
+
       edited_hotels = st.data_editor(
-          st.session_state.hotels[["hotel_name", "address", "nights", "note"]],
+          st.session_state.hotels[hotel_cols_to_show],
           key="hotels_editor",
           use_container_width=True,
           hide_index=True,
       )
       if not edited_hotels.equals(
-          st.session_state.hotels[["hotel_name", "address", "nights", "note"]]
+          st.session_state.hotels[hotel_cols_to_show]
       ):
         st.session_state.hotels.update(edited_hotels)
         st.session_state.hotels.to_csv("hotels.csv", index=False)
 
       hotel_options = {}
       for idx, row in st.session_state.hotels.iterrows():
-        label = f"{row['hotel_name']} ({row['nights']} 晚)"
+        label = f"{row['hotel_name']} ({row['check_in']} 起, {row['nights']} 晚)"
         hotel_options[label] = idx
 
       col_h1, col_h2 = st.columns([3, 1])
