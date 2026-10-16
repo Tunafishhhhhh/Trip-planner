@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 import io
+import json
 import zipfile
 from geopy.geocoders import Nominatim
 import folium
@@ -75,7 +76,7 @@ with col_title_2:
       st.session_state.app_title = new_title_input
       with open("title.txt", "w", encoding="utf-8") as f:
         f.write(new_title_input)
-      st.success("標題已更新！")
+      st.toast("標題已更新！")
       st.rerun()
 
 # 初始化 Session State 裡的資料
@@ -137,6 +138,163 @@ if "flight_info" not in st.session_state:
         "例如: AC888 YYZ to CDG, 2026-12-18\n(輸入後會自動儲存)"
     )
 
+if "settings" not in st.session_state:
+  try:
+    with open("settings.json", "r", encoding="utf-8") as f:
+      st.session_state.settings = json.load(f)
+  except (FileNotFoundError, json.JSONDecodeError):
+    st.session_state.settings = {}
+
+
+def save_settings():
+  with open("settings.json", "w", encoding="utf-8") as f:
+    json.dump(st.session_state.settings, f, ensure_ascii=False, indent=2)
+
+
+@st.cache_data(show_spinner=False)
+def build_map_html(itinerary_df, hotels_df, start_date):
+  if not itinerary_df.empty:
+    start_lat = itinerary_df["lat"].iloc[0]
+    start_lon = itinerary_df["lon"].iloc[0]
+  elif not hotels_df.empty:
+    start_lat = hotels_df["lat"].iloc[0]
+    start_lon = hotels_df["lon"].iloc[0]
+  else:
+    start_lat, start_lon = 49.2827, -123.1207
+
+  m = folium.Map(
+      location=[start_lat, start_lon], zoom_start=6, tiles="Esri.WorldStreetMap"
+  )
+
+  all_coords = []
+
+  if not hotels_df.empty:
+    hotel_layer = folium.FeatureGroup(name="🏨 住宿")
+    for _, h_row in hotels_df.iterrows():
+      h_lat, h_lon = h_row["lat"], h_row["lon"]
+      all_coords.append([h_lat, h_lon])
+      maps_url = f"https://www.google.com/maps/search/?api=1&query={h_lat},{h_lon}"
+      popup_html = f"""
+          <div style="font-family:sans-serif; min-width: 200px;">
+              <b>🏨 住宿: {h_row['hotel_name']}</b><br>
+              <hr style="margin: 5px 0;">
+              <b>地址:</b> {h_row['address']}<br>
+              <b>入住:</b> {h_row['check_in']} ~ {h_row['check_out']} ({h_row['nights']} 晚)<br>
+              <b>備註:</b> {h_row['note']}<br><br>
+              <a href="{maps_url}" target="_blank" style="background:#4F46E5; color:white; padding:4px 8px; border-radius:4px; text-decoration:none; display:inline-block; font-size:12px;">🗺️ 開啟 Google 導航</a>
+          </div>
+      """
+      folium.Marker(
+          [h_lat, h_lon],
+          popup=folium.Popup(popup_html, max_width=300),
+          tooltip=f"飯店: {h_row['hotel_name']}",
+          icon=folium.Icon(color="red", icon="home", prefix="fa"),
+      ).add_to(hotel_layer)
+    hotel_layer.add_to(m)
+
+  if not itinerary_df.empty:
+    colors = ["blue", "green", "purple", "orange", "cadetblue"]
+    unique_days = sorted(itinerary_df["day"].unique())
+
+    for i, d in enumerate(unique_days):
+      day_df = itinerary_df[itinerary_df["day"] == d]
+      day_color = colors[i % len(colors)]
+      day_coords = []
+      day_date = start_date + timedelta(days=int(d) - 1)
+      day_layer = folium.FeatureGroup(
+          name=f"Day {int(d)} · {day_date.strftime('%m/%d %a')}"
+      )
+
+      for _, row in day_df.iterrows():
+        lat, lon = row["lat"], row["lon"]
+        day_coords.append([lat, lon])
+        all_coords.append([lat, lon])
+        maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+
+        popup_html = f"""
+            <div style="font-family:sans-serif; min-width: 180px;">
+                <b>Day {int(row['day'])}: {row['location_name']}</b><br>
+                <hr style="margin: 5px 0;">
+                <b>備註:</b> {row['note']}<br><br>
+                <a href="{maps_url}" target="_blank" style="background:#0D9488; color:white; padding:4px 8px; border-radius:4px; text-decoration:none; display:inline-block; font-size:12px;">🗺️ 開啟 Google 導航</a>
+            </div>
+        """
+        folium.Marker(
+            [lat, lon],
+            popup=folium.Popup(popup_html, max_width=300),
+            tooltip=f"Day {int(row['day'])}: {row['location_name']}",
+            icon=folium.Icon(color=day_color, icon="info-sign"),
+        ).add_to(day_layer)
+
+      if len(day_coords) > 1:
+        folium.PolyLine(
+            day_coords,
+            color=day_color,
+            weight=4,
+            opacity=0.8,
+            tooltip=f"Day {int(d)} 路線",
+        ).add_to(day_layer)
+
+      day_layer.add_to(m)
+
+  if all_coords:
+    m.fit_bounds(all_coords, padding=(40, 40))
+
+  folium.LayerControl(collapsed=False).add_to(m)
+  return m._repr_html_()
+
+
+@st.dialog("確認刪除景點")
+def confirm_delete_itinerary(label, idx):
+  st.write(f"確定要刪除 **{label}** 嗎？此動作無法復原。")
+  col_yes, col_no = st.columns(2)
+  with col_yes:
+    if st.button("🗑️ 確認刪除", key="cdi_yes", use_container_width=True):
+      st.session_state.itinerary = (
+          st.session_state.itinerary.drop(idx).reset_index(drop=True)
+      )
+      st.session_state.itinerary.to_csv("itinerary.csv", index=False)
+      st.toast("已成功刪除該景點！")
+      st.rerun()
+  with col_no:
+    if st.button("取消", key="cdi_no", use_container_width=True):
+      st.rerun()
+
+
+@st.dialog("確認刪除飯店")
+def confirm_delete_hotel(label, idx):
+  st.write(f"確定要刪除 **{label}** 嗎？此動作無法復原。")
+  col_yes, col_no = st.columns(2)
+  with col_yes:
+    if st.button("🗑️ 確認刪除", key="cdh_yes", use_container_width=True):
+      st.session_state.hotels = st.session_state.hotels.drop(idx).reset_index(
+          drop=True
+      )
+      st.session_state.hotels.to_csv("hotels.csv", index=False)
+      st.toast("已成功刪除該飯店！")
+      st.rerun()
+  with col_no:
+    if st.button("取消", key="cdh_no", use_container_width=True):
+      st.rerun()
+
+
+@st.dialog("確認刪除項目")
+def confirm_delete_link(label, idx):
+  st.write(f"確定要刪除 **{label}** 嗎？此動作無法復原。")
+  col_yes, col_no = st.columns(2)
+  with col_yes:
+    if st.button("🗑️ 確認刪除", key="cdl_yes", use_container_width=True):
+      st.session_state.links = st.session_state.links.drop(idx).reset_index(
+          drop=True
+      )
+      st.session_state.links.to_csv("links.csv", index=False)
+      st.toast("已成功刪除該項目！")
+      st.rerun()
+  with col_no:
+    if st.button("取消", key="cdl_no", use_container_width=True):
+      st.rerun()
+
+
 st.markdown("---")
 
 # --- 側邊欄：現代感收納排版與總天數設定 ---
@@ -145,20 +303,48 @@ with st.sidebar:
 
   # 1. 總行程天數設定
   with st.expander("📅 旅程總天數設定", expanded=True):
-    max_existing_day = (
-        int(st.session_state.itinerary["day"].max())
-        if not st.session_state.itinerary.empty
-        else 1
-    )
-    default_total_days = max(5, max_existing_day)
+    if "total_days" not in st.session_state:
+      max_existing_day = (
+          int(st.session_state.itinerary["day"].max())
+          if not st.session_state.itinerary.empty
+          else 1
+      )
+      saved_total_days = st.session_state.settings.get(
+          "total_days", max(5, max_existing_day)
+      )
+      st.session_state.total_days = min(30, max(1, int(saved_total_days)))
+
     total_days = st.number_input(
         "預計旅行天數",
         min_value=1,
         max_value=30,
-        value=default_total_days,
         step=1,
+        key="total_days",
         help="設定後會在每日行程分頁中自動為你準備好對應天數的頁籤",
     )
+
+    if int(st.session_state.settings.get("total_days", 0)) != int(total_days):
+      st.session_state.settings["total_days"] = int(total_days)
+      save_settings()
+
+    if "trip_start_date" not in st.session_state:
+      saved_start = st.session_state.settings.get("start_date")
+      try:
+        st.session_state.trip_start_date = (
+            date.fromisoformat(saved_start) if saved_start else date.today()
+        )
+      except (TypeError, ValueError):
+        st.session_state.trip_start_date = date.today()
+
+    start_date = st.date_input(
+        "出發日期",
+        key="trip_start_date",
+        help="每日行程分頁與地圖圖例會依此顯示實際日期",
+    )
+
+    if st.session_state.settings.get("start_date") != start_date.isoformat():
+      st.session_state.settings["start_date"] = start_date.isoformat()
+      save_settings()
 
   # 2. 航班資訊
   with st.expander("✈️ 航班資訊", expanded=False):
@@ -179,6 +365,11 @@ with st.sidebar:
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
       zip_file.writestr("title.txt", st.session_state.app_title)
+      if st.session_state.settings:
+        zip_file.writestr(
+            "settings.json",
+            json.dumps(st.session_state.settings, ensure_ascii=False, indent=2),
+        )
       if not st.session_state.itinerary.empty:
         zip_file.writestr(
             "itinerary.csv", st.session_state.itinerary.to_csv(index=False)
@@ -215,7 +406,10 @@ with main_tab1:
   df = st.session_state.itinerary
 
   day_list = list(range(1, int(total_days) + 1))
-  day_tabs = st.tabs([f"Day {d}" for d in day_list])
+  day_tabs = st.tabs([
+      f"Day {d} · {(start_date + timedelta(days=d - 1)).strftime('%m/%d %a')}"
+      for d in day_list
+  ])
 
   for tab, d in zip(day_tabs, day_list):
     with tab:
@@ -267,13 +461,9 @@ with main_tab1:
       )
     with col_i2:
       if st.button("🗑️ 刪除景點", key="del_itin_btn", use_container_width=True):
-        idx_to_remove = itin_options[selected_itin_label]
-        st.session_state.itinerary = (
-            st.session_state.itinerary.drop(idx_to_remove).reset_index(drop=True)
+        confirm_delete_itinerary(
+            selected_itin_label, itin_options[selected_itin_label]
         )
-        st.session_state.itinerary.to_csv("itinerary.csv", index=False)
-        st.success("已成功刪除該景點！")
-        st.rerun()
 
   st.markdown("---")
 
@@ -333,7 +523,7 @@ with main_tab1:
                 )
                 st.session_state.itinerary.to_csv("itinerary.csv", index=False)
 
-                st.success(f"成功找到「{place_name}」並加入 Day {int(day_num)}！")
+                st.toast(f"成功找到「{place_name}」並加入 Day {int(day_num)}！")
                 st.rerun()
               else:
                 st.error("找不到這個地點，請試著輸入更詳細的城市或國家。")
@@ -344,82 +534,12 @@ with main_tab1:
 
   with col_bottom_map:
     st.subheader("🗺️ 互動地圖預覽")
-    df = st.session_state.itinerary
-    hotels_df = st.session_state.hotels
-
-    if not df.empty:
-      start_lat = df["lat"].iloc[0]
-      start_lon = df["lon"].iloc[0]
-    elif not hotels_df.empty:
-      start_lat = hotels_df["lat"].iloc[0]
-      start_lon = hotels_df["lon"].iloc[0]
-    else:
-      start_lat, start_lon = 49.2827, -123.1207
-
-    m = folium.Map(
-        location=[start_lat, start_lon], zoom_start=6, tiles="Esri.WorldStreetMap"
+    st.components.v1.html(
+        build_map_html(
+            st.session_state.itinerary, st.session_state.hotels, start_date
+        ),
+        height=500,
     )
-
-    if not hotels_df.empty:
-      for _, h_row in hotels_df.iterrows():
-        h_lat, h_lon = h_row["lat"], h_row["lon"]
-        maps_url = f"https://www.google.com/maps/search/?api=1&query={h_lat},{h_lon}"
-        popup_html = f"""
-            <div style="font-family:sans-serif; min-width: 200px;">
-                <b>🏨 住宿: {h_row['hotel_name']}</b><br>
-                <hr style="margin: 5px 0;">
-                <b>地址:</b> {h_row['address']}<br>
-                <b>入住:</b> {h_row['check_in']} ~ {h_row['check_out']} ({h_row['nights']} 晚)<br>
-                <b>備註:</b> {h_row['note']}<br><br>
-                <a href="{maps_url}" target="_blank" style="background:#4F46E5; color:white; padding:4px 8px; border-radius:4px; text-decoration:none; display:inline-block; font-size:12px;">🗺️ 開啟 Google 導航</a>
-            </div>
-        """
-        folium.Marker(
-            [h_lat, h_lon],
-            popup=folium.Popup(popup_html, max_width=300),
-            tooltip=f"飯店: {h_row['hotel_name']}",
-            icon=folium.Icon(color="red", icon="home", prefix="fa"),
-        ).add_to(m)
-
-    if not df.empty:
-      colors = ["blue", "green", "purple", "orange", "cadetblue"]
-      unique_days = sorted(df["day"].unique())
-
-      for i, d in enumerate(unique_days):
-        day_df = df[df["day"] == d]
-        day_color = colors[i % len(colors)]
-        day_coords = []
-
-        for _, row in day_df.iterrows():
-          lat, lon = row["lat"], row["lon"]
-          day_coords.append([lat, lon])
-          maps_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
-
-          popup_html = f"""
-              <div style="font-family:sans-serif; min-width: 180px;">
-                  <b>Day {int(row['day'])}: {row['location_name']}</b><br>
-                  <hr style="margin: 5px 0;">
-                  <b>備註:</b> {row['note']}<br><br>
-                  <a href="{maps_url}" target="_blank" style="background:#0D9488; color:white; padding:4px 8px; border-radius:4px; text-decoration:none; display:inline-block; font-size:12px;">🗺️ 開啟 Google 導航</a>
-              </div>
-          """
-          folium.Marker(
-              [lat, lon],
-              popup=folium.Popup(popup_html, max_width=300),
-              tooltip=f"Day {int(row['day'])}: {row['location_name']}",
-              icon=folium.Icon(color=day_color, icon="info-sign"),
-          ).add_to(m)
-
-        if len(day_coords) > 1:
-          folium.PolyLine(
-              day_coords,
-              color=day_color,
-              weight=4,
-              opacity=0.8,
-              tooltip=f"Day {d} 路線",
-          ).add_to(m)
-
-    st.components.v1.html(m._repr_html_(), height=500)
 
 # 【分頁 2：住宿管理】
 with main_tab2:
@@ -489,7 +609,7 @@ with main_tab2:
               )
               st.session_state.hotels.to_csv("hotels.csv", index=False)
 
-              st.success(f"成功新增飯店「{hotel_name_input}」！")
+              st.toast(f"成功新增飯店「{hotel_name_input}」！")
               st.rerun()
             else:
               st.error("找不到這個地址，請嘗試輸入更具體的城市名稱。")
@@ -539,13 +659,9 @@ with main_tab2:
       )
     with col_h2:
       if st.button("🗑️ 刪除飯店", key="del_hotel_btn"):
-        h_idx_to_remove = hotel_options[selected_hotel_label]
-        st.session_state.hotels = (
-            st.session_state.hotels.drop(h_idx_to_remove).reset_index(drop=True)
+        confirm_delete_hotel(
+            selected_hotel_label, hotel_options[selected_hotel_label]
         )
-        st.session_state.hotels.to_csv("hotels.csv", index=False)
-        st.success("已成功刪除該飯店！")
-        st.rerun()
   else:
     st.markdown(
         """
@@ -599,7 +715,7 @@ with main_tab3:
             [st.session_state.links, new_link_row], ignore_index=True
         )
         st.session_state.links.to_csv("links.csv", index=False)
-        st.success(f"成功新增「{link_title}」！")
+        st.toast(f"成功新增「{link_title}」！")
         st.rerun()
       else:
         st.warning("請至少填寫項目名稱與網址！")
@@ -638,13 +754,9 @@ with main_tab3:
       )
     with col_lk2:
       if st.button("🗑️ 刪除連結", key="del_link_btn"):
-        l_idx_to_remove = link_options[selected_link_label]
-        st.session_state.links = (
-            st.session_state.links.drop(l_idx_to_remove).reset_index(drop=True)
+        confirm_delete_link(
+            selected_link_label, link_options[selected_link_label]
         )
-        st.session_state.links.to_csv("links.csv", index=False)
-        st.success("已成功刪除該項目！")
-        st.rerun()
   else:
     st.markdown(
         """
