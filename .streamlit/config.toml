@@ -1,0 +1,7 @@
+[theme]
+base = "dark"                             # 設定基礎模式為暗黑模式
+primaryColor = "#3B82F6"                  # 按鈕與焦點顏色 (極致湛藍)
+backgroundColor = "#0F172A"               # 網頁主背景 (極致深藍黑)
+secondaryBackgroundColor = "#1E293B"      # 側邊欄與卡片背景 (質感石墨藍)
+textColor = "#F8FAFC"                     # 文字顏色 (柔和雪白)
+font = "sans serif"
